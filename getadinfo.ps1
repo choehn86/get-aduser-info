@@ -1,7 +1,7 @@
 ﻿[cmdletbinding()]
 param (
 	[string]$userID,
-    [char] $modifer
+    	[char] $modifer
 )
 
 if ($PSBoundParameters['Debug']) 
