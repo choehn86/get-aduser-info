@@ -4,10 +4,10 @@
 .DESCRIPTION
     Combines Get-ADUser cmdlet with a configuration file (JSON) to parse the following:
      - domain controllers
-     - user attributes/properties,
+     - user attributes/properties
      - aliases
      - specific group formatting
-     - modifiers (ex. copying attribute to clipboard).
+     - modifiers (ex. copying attribute to clipboard)
     'config.json' must be placed in the same working dir as the script to function.
 .PARAMETER Path
     The path to the .
@@ -80,12 +80,12 @@ if(Check-Command('Get-ADUser'))
                 if($c -lt [int]$global:DCs.Count)
                 {
                     $user = Get-ADUser $userID -Server $global:DCs[$c] -Properties * | Select -Property $global:props
-                    break;
+                    break
                 }
                 else
                 {
                     $user = Get-ADUser $userID -Properties * | Select -Property $global:props
-                    break;
+                    break
                 }
             }
             catch [Microsoft.ActiveDirectory.Management.ADServerDownException]
@@ -97,8 +97,13 @@ if(Check-Command('Get-ADUser'))
                     default {  $errorstr = "Unable to reach $($global:DCs[$c]),trying next DC in config file..." }
                 }
                 Write-Debug $errorstr
-                $c++
             }
+            catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException]
+            {
+                "User $userID not found"
+                break
+            }
+            $c++
         }
 
         if($user)
@@ -143,9 +148,10 @@ if(Check-Command('Get-ADUser'))
                 "------------------------------------------------"
             }
             else { "User is not a member of any groups!" }
-        } 
-        else { "No data found" }
+        }
     }
     catch { $_  }
+
+    "Completed on: $(Get-Date -format g)"
 }
 else { 'Get-ADUser cmdlet not found!' }
