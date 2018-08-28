@@ -22,8 +22,8 @@
       	{ "name": "Logon", "prop": "userPrincipalName" }
       ]
     },
-    "copyattribute": {
-      "name": "samAccountName", "omit": ""
+    "modifier": {
+      "name": "samAccountName", "action": "copy", "omit": ""
     },
     "groupformatting": [
     	{ "filter": "OU=Admin", "color": "green"},
