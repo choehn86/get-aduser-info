@@ -12,6 +12,7 @@
 .PARAMETER Path
     The path to the .
 .EXAMPLE
+    .\getadinfo.ps1 USER000 -ForceDS
     .\getadinfo.ps1 USER001 c
     .\getadinfo.ps1 USER002
 .LINK
@@ -23,6 +24,8 @@ param (
 	# samAccountName to query against AD (required)
     [Parameter(Mandatory=$true)]
     [string]$userID,
+    # switch to force script to use DirectorySearcher instead of Get-ADUser
+    [switch]$ForceDS,
     # generic modifier - currently used to copy a specified attribute from the config file to the clipboard (optional)
     [char] $modifer
 )
@@ -62,32 +65,27 @@ function Check-Command($cmdname) # checks if cmdlet is loaded/installed
     return [bool](Get-Command -Name $cmdname -ErrorAction SilentlyContinue)
 }
 
-if(Check-Command('Get-ADUser'))
+$c = 0
+$user = $null
+$groups = $null
+$defaultDC = $($env:LOGONSERVER.Replace('\','')  + "." + $env:USERDNSDOMAIN)
+$defaultGroupColor = 'cyan'
+
+if($(Check-Command('Get-ADUser')) -and !($ForceDS))
 {
-    try
-    {
         Write-Debug "Found Get-ADUser cmdlet!"
-        $c = 0
-        $user = $null
-        $groups = $null
-        $defaultDC = $($env:LOGONSERVER.Replace('\','')  + "." + $env:USERDNSDOMAIN)
-        $defaultGroupColor = 'cyan'
+        $DC = $null
 
         while($c -le [int]$global:DCs.Count)
         {
-            try
+            switch($c)
             {
-                if($c -lt [int]$global:DCs.Count)
-                {
-                    $user = Get-ADUser $userID -Server $global:DCs[$c] -Properties * | Select -Property $global:props
-                    break
-                }
-                else
-                {
-                    $user = Get-ADUser $userID -Properties * | Select -Property $global:props
-                    break
-                }
+            $global:DCs.Count { $DC = $defaultDC }
+            default { $DC = $global:DCs[$c] }
             }
+
+            try { $user = Get-ADUser $userID -Server $DC -Properties * | Select -Property $global:props; break }
+
             catch [Microsoft.ActiveDirectory.Management.ADServerDownException]
             {
                 switch (([int]$global:DCs.Count - $c))
@@ -109,49 +107,108 @@ if(Check-Command('Get-ADUser'))
         if($user)
         {
             $user | Add-Member -MemberType NoteProperty -Name objectGUID -Value (($user.ObjectGUID.ToByteArray() | foreach { $_.ToString("X2") }) -join '' ) -Force
-            if($global:aliases) { $global:aliases | Foreach-Object { Add-Member -InputObject $user -MemberType AliasProperty -Name $_.name -Value $_.prop -Force -ErrorAction SilentlyContinue } }
-     
-            # handle any supplied modifiers
-            foreach($gmod in $global:modifier)
-            {    
-                switch($modifer)
-                {
-                    'c' # copy attribute to clipboard
-                        {
-                            if($gmod.action -eq 'copy')
-                            {
-                                $user.($gmod.name).Replace([string]$gmod.omit,"") | Set-Clipboard
-                                Write-Debug "copied $($gmod.name) to clipboard" 
-                            }
-                        }      
-                }
-            }
+        }  
+}
+else 
+{ 
+    Write-Debug "Get-ADUser not found, using DirectorySeacher!"
 
-            $user | Select -Property * -ExcludeProperty $($global:aliases.prop + ("memberOf"))
+    $colResults = $null
+    $objSearcher = New-Object System.DirectoryServices.DirectorySearcher
+    $objSearcher.PageSize = 1000
+    $objSearcher.Filter = "(&(objectCategory=User)(samAccountName=$userID))"
+    $objSearcher.SearchScope = "Subtree"
 
-            if($user.memberOf.length -gt 0)
-            {
-                [int]$counter = 1
-                $groups = $user.memberOf.replace("CN=", "") | Sort-Object { ($_ -match "$($global:groupformatting.filter -join '|')") } -Descending
+    while($c -le [int]$global:DCs.Count)
+    {
+        switch($c)
+        {
+            $global:DCs.Count { $objSearcher.SearchRoot = [adsi] "LDAP://$defaultDC" }
+            default { $objSearcher.SearchRoot = [adsi] "LDAP://$($global:DCs[$c])" }
+        }
+
+        try { $colResults = $objSearcher.FindAll(); break }
+        catch [System.Runtime.InteropServices.COMException]
+        {
+           if($_.Exception.Message.Trim() -eq "The server is not operational.")
+           {
+               switch (([int]$global:DCs.Count - $c))
+               {
+                   0 { $errorstr = "Unable to reach $defaultDC" }
+                   1 { $errorstr = "Unable to reach $($global:DCs[$c]), using $defaultDC" }
+                   default {  $errorstr = "Unable to reach $($global:DCs[$c]),trying next DC in config file..." }
+               }
+               Write-Debug $errorstr
+           }
+        }
+        $c++
+    }
+
+    if($colResults.Count -gt 0)
+    {
+        $user = New-Object PSObject
+
+        foreach($p in $props)
+        {
+            $val = ''
             
-                "------------------  Member Of ------------------"           
-                foreach($group in $groups)
-                {
-                    $groupColor = $defaultGroupColor
-                    foreach($fmt in $global:groupformatting)
-                    {
-                        if( $group -match $fmt.filter ) { $groupColor = $fmt.color }
-                    }
-                    Write-Host ('' + $counter + ' >> ' + $group) -foregroundColor $groupColor
-                    $counter++  
-                }
-                "------------------------------------------------"
+            switch($p)
+            {
+                    'Enabled'      { $val = !( (($colResults.Properties['useraccountcontrol'].Item(0)) -band 2) -eq 2) }
+                    'objectguid'   { $val = (($colResults.Properties['objectGUID'].Item(0) | foreach { $_.ToString("X2") }) -join '' ) }
+                    'memberOf'     { $val = $colResults.Properties['memberOf'].GetEnumerator() | foreach-object { $_ } }
+                    default        { $val = if ($colResults.Properties[$p].Count -gt 0) { $colResults.Properties[$p].Item(0) }  }
             }
-            else { "User is not a member of any groups!" }
+            $user | Add-Member -MemberType NoteProperty -Name $p -Value $val -ErrorAction SilentlyContinue
+           
         }
     }
-    catch { $_  }
+}
 
+# check for valid user and process
+
+if($user)
+{
+   if($global:aliases) { $global:aliases | Foreach-Object { Add-Member -InputObject $user -MemberType AliasProperty -Name $_.name -Value $_.prop -Force -ErrorAction SilentlyContinue } }
+     
+   # handle any supplied modifiers
+   foreach($gmod in $global:modifier)
+   {    
+        switch($modifer)
+        {
+            'c' # copy attribute to clipboard
+            {
+                if($gmod.action -eq 'copy')
+                {
+                    $user.($gmod.name).Replace([string]$gmod.omit,"") | Set-Clipboard
+                    Write-Debug "copied $($gmod.name) to clipboard" 
+                }
+            }      
+        }
+    }
+
+    $user | Select -Property * -ExcludeProperty $($global:aliases.prop + ("memberOf"))
+
+    if($user.memberOf.length -gt 0)
+    {
+        [int]$counter = 1
+        $groups = $user.memberOf.replace("CN=", "") | Sort-Object { ($_ -match "$($global:groupformatting.filter -join '|')") } -Descending
+            
+        "------------------  Member Of ------------------"           
+        foreach($group in $groups)
+        {
+            $groupColor = $defaultGroupColor
+            foreach($fmt in $global:groupformatting)
+            {
+                if( $group -match $fmt.filter ) { $groupColor = $fmt.color }
+            }
+            Write-Host ('' + $counter + ' >> ' + $group) -foregroundColor $groupColor
+            $counter++  
+        }
+        "------------------------------------------------"
+    }
+    else { "User is not a member of any groups!" }
+    
     "Completed on: $(Get-Date -format g)"
 }
-else { 'Get-ADUser cmdlet not found!' }
+else { "User $userID not found" }
