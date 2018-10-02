@@ -160,7 +160,7 @@ else
             switch($p)
             {
                 # check UAC to see if account is Enabled or Disabled
-                'Enabled'      { $val = [string]!( (($val) -band 2) -eq 2) }
+                'Enabled'      { $val = ( !(($colResults.Properties['userAccountControl'].Item(0)) -band 2) -eq 2) }
                 # convert objectguid
                 'objectguid'   { $val = ($val | % { $_.ToString("X2") }) -join '' } 
                 'memberOf'     { $val = $val | % { $_ } }
