@@ -192,7 +192,7 @@ if($user)
         }
     }
 
-    $user | Select -Property * -ExcludeProperty $($global:aliases.prop + ("memberOf"))
+    $user | Select -Property * -ExcludeProperty $(@($global:aliases.prop) + ("memberOf"))
 
     if($user.memberOf.length -gt 0)
     {
