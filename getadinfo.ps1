@@ -13,9 +13,10 @@
     The path to the .
 .EXAMPLE
     .\getadinfo.ps1 USER000 -ForceDS
-    .\getadinfo.ps1 USER001 -Copy
-    .\getadinfo.ps1 USER002 -Copy mail
-    .\getadinfo.ps1 USER003
+    .\getadinfo.ps1 USER001 -allProps
+    .\getadinfo.ps1 USER002 -Copy
+    .\getadinfo.ps1 USER003 -Copy mail
+    .\getadinfo.ps1 USER004
 .LINK
     https://github.com/choehn86/getadinfo
 #>
@@ -36,7 +37,11 @@ param (
     
     # switch to force script to use DirectorySearcher instead of Get-ADUser
     [Parameter(Position = 3)]
-    [switch]$ForceDS
+    [switch]$ForceDS,
+
+    # switch to force script to return ALL properties (ignores config file)
+    [Parameter(Position = 4)]
+    [switch]$allProps
 )
 
 if($PSBoundParameters['Debug']) { $DebugPreference = 'Continue' }
@@ -66,6 +71,7 @@ else
 if($copy)     { Write-Debug 'Copy switch specified!' }
 if($copyAttr) { Write-Debug ($copyAttr + ' to be copied!') }
 if($ForceDS)  { Write-Debug 'Forcing DirectorySearcher!' }
+if($allProps) { Write-Debug 'Obtaining all available properties' }
 
 function Check-Command($cmdname) # checks if cmdlet is loaded/installed
 {
@@ -83,6 +89,7 @@ if($(Check-Command('Get-ADUser')) -and !($ForceDS))
         Write-Debug "Found Get-ADUser cmdlet!"
         $DC = $null
 
+        if($allProps) { $global:props = "*" } # ignore config file, display ALL properties returned
         while($c -le [int]$global:DCs.Count)
         {
             switch($c)
@@ -152,7 +159,9 @@ else
     {
         $user = New-Object PSObject
 
-        foreach($p in $props)
+        if($allProps) { $global:props = $colResults.Properties.PropertyNames } # ignore config file, display ALL properties returned
+
+        foreach($p in $global:props)
         {
             # check if attribute exists and assign to val (switch is used for further processing based on properties returned)
             $val = if($colResults.Properties[$p].Count -gt 0) { $colResults.Properties[$p].GetEnumerator() | % { $_ } } else { '' }
